@@ -2,8 +2,8 @@
 
 A Fabric mod that makes Minecraft world generation faster by handing the expensive
 parts to [SteelMC](https://github.com/Steel-Foundation/SteelMC) (via the
-[Damascus](https://github.com/Vik-Varma/Damascus) fork), running as a separate
-native process.
+[Vik-Varma/SteelMC](https://github.com/Vik-Varma/SteelMC) fork, kept in sync with
+upstream), running as a separate native process.
 
 > [!WARNING]
 > Pre-alpha planning stage. Nothing here runs yet. Back up worlds before trying it.
@@ -21,7 +21,7 @@ native process.
 ## Architecture (proposed)
 
 ```
-Minecraft (Java, Fabric)                      oxide-worker (Rust, Damascus crates)
+Minecraft (Java, Fabric)                      oxide-worker (Rust, SteelMC crates)
 ┌───────────────────────────────┐   stdin/    ┌──────────────────────────────────┐
 │ vanilla chunk pipeline        │   stdout    │ handshake: seed, world preset,   │
 │  STRUCTURE_STARTS  (vanilla)  │  framed     │   worldgen registry fingerprint  │
@@ -61,12 +61,12 @@ Oxide uses vanilla's own `buildTerrain` for a chunk, or for the whole world, whe
 | Path | What |
 |------|------|
 | `mod/` | Fabric mod (Java, Gradle, Loom) |
-| `worker/` | `oxide-worker` Rust binary, depends on Damascus via git |
+| `worker/` | `oxide-worker` Rust binary, depends on the SteelMC fork via git |
 | `protocol/` | IPC message spec shared by both sides |
 
 ## Roadmap
 
-0. **Foundations.** Port Damascus to 26.3 (merged `TERRAIN` step). Confirm the
+0. **Foundations.** SteelMC targets 26.3 (merged `TERRAIN` step). Confirm the
    `buildTerrain` inputs and outputs against the 26.3 source.
 1. **Worker.** Headless generation-only Steel engine; terrain request/reply over
    stdin/stdout; handshake with registry fingerprint.
