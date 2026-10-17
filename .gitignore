@@ -1,0 +1,15 @@
+# Gradle / Java
+.gradle/
+build/
+out/
+run/
+*.class
+
+# Rust
+target/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.DS_Store
