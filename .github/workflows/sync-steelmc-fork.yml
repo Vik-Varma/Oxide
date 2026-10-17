@@ -1,0 +1,54 @@
+# Keeps the Vik-Varma/SteelMC fork's master an exact mirror of upstream.
+#
+# Runs from Oxide so the fork's own Actions (upstream's release, Docker and docs
+# workflows) can stay disabled. Only fast-forwards: if the fork's master ever has
+# commits of its own, the run fails instead of creating a merge commit.
+#
+# Needs the STEELMC_SYNC_TOKEN secret: a fine-grained token for Vik-Varma/SteelMC
+# with Contents and Workflows read/write (Workflows is needed when upstream
+# changes files in .github/workflows).
+name: Sync SteelMC fork
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sync-steelmc-fork
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.STEELMC_SYNC_TOKEN }}
+      FORK_OWNER: Vik-Varma
+      FORK: Vik-Varma/SteelMC
+      UPSTREAM: Steel-Foundation/SteelMC
+      BRANCH: master
+    steps:
+      - name: Fast-forward the fork to upstream
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Missing STEELMC_SYNC_TOKEN secret (fine-grained token for $FORK, Contents and Workflows read/write)."
+            exit 1
+          fi
+
+          status=$(gh api "repos/$UPSTREAM/compare/$BRANCH...$FORK_OWNER:$BRANCH" --jq .status)
+          echo "Fork $BRANCH compared to upstream: $status"
+          case "$status" in
+            identical)
+              echo "Already up to date."
+              ;;
+            behind)
+              gh api -X POST "repos/$FORK/merge-upstream" -f branch="$BRANCH" \
+                --jq '"\(.merge_type): \(.message)"'
+              ;;
+            *)
+              echo "::error::Fork $BRANCH is $status relative to upstream; it must only ever be behind. Resolve it by hand."
+              exit 1
+              ;;
+          esac
