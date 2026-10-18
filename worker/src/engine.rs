@@ -8,7 +8,7 @@ use steel_core::chunk::Chunk;
 use steel_core::chunk::chunk_request::{
     ChunkRequest, ChunkRequestHandle, ChunkRequestState, ChunkTicketKind,
 };
-use steel_core::chunk::heightmap::HeightmapType;
+use steel_core::chunk::heightmap::{ChunkHeightmaps, HeightmapType};
 use steel_core::chunk::status::ChunkStatus;
 use steel_core::entity::damage::DamageHistory;
 use steel_core::level_data::{GameTimeSource, WorldGenerationSettings};
@@ -25,6 +25,10 @@ const SUPPORTED_DIMENSIONS: [&str; 3] = [
     "minecraft:the_nether",
     "minecraft:the_end",
 ];
+
+/// The heightmaps vanilla's `TERRAIN` step maintains.
+const WORLDGEN_HEIGHTMAPS: [HeightmapType; 2] =
+    [HeightmapType::WorldSurfaceWg, HeightmapType::OceanFloorWg];
 
 /// One section's block states, in vanilla's `(y << 8) | (z << 4) | x` order.
 pub enum SectionStates {
@@ -215,7 +219,28 @@ impl TerrainChunk {
             .collect();
         let postprocessing = chunk.postprocessing.lock().to_vec();
 
-        let heightmaps = chunk.generation_heightmaps();
+        let stored = chunk.generation_heightmaps();
+        let rebuilt;
+        let heightmaps = if WORLDGEN_HEIGHTMAPS
+            .iter()
+            .all(|&heightmap_type| stored.get(heightmap_type).is_some())
+        {
+            &*stored
+        } else {
+            // SteelMC saves only the heightmaps of a chunk's current status (vanilla
+            // saves all of them), so a TERRAIN chunk loaded from the cache lacks
+            // these. Vanilla updates them on every block write during TERRAIN, so
+            // rebuilding them from the final blocks gives the same values.
+            let mut fresh = ChunkHeightmaps::empty();
+            fresh.prime_from_sections(
+                &WORLDGEN_HEIGHTMAPS,
+                chunk.min_y(),
+                chunk.height(),
+                &chunk.sections.sections,
+            );
+            rebuilt = fresh;
+            &rebuilt
+        };
         let column_heights = |heightmap_type: HeightmapType| -> Result<[i32; 256], String> {
             let heightmap = heightmaps
                 .get(heightmap_type)

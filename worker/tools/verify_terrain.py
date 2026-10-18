@@ -145,6 +145,10 @@ def main():
     parser.add_argument("--dimension", default="minecraft:overworld")
     parser.add_argument("--count", type=int, default=50)
     parser.add_argument("--threads", type=int, default=0)
+    parser.add_argument("--cache-dir", help="reuse this chunk cache instead of a fresh temporary one")
+    parser.add_argument("--skip", type=int, default=0, help="skip this many fixture chunks first")
+    parser.add_argument("--record", help="write each chunk's heightmaps and post-processing to this JSON file")
+    parser.add_argument("--compare", help="check heightmaps and post-processing against a --record file")
     args = parser.parse_args()
 
     with open(args.fixture) as file:
@@ -152,9 +156,10 @@ def main():
     chunks = [
         chunk for chunk in fixture["dimensions"][args.dimension]["chunks"]
         if "minecraft:terrain" in chunk["stages"]
-    ][:args.count]
+    ][args.skip:args.skip + args.count]
 
-    with tempfile.TemporaryDirectory() as cache_dir:
+    with tempfile.TemporaryDirectory() as temporary_dir:
+        cache_dir = args.cache_dir or temporary_dir
         worker = subprocess.Popen([args.worker], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         send(worker.stdin, b"\x01" + struct.pack(">Iq", PROTOCOL_VERSION, fixture["seed"])
              + encode_string(args.dimension) + encode_string(cache_dir)
@@ -178,12 +183,18 @@ def main():
                 request_id = reader.take("I")
                 results[request_id] = ("error", reader.string())
                 continue
-            request_id, sections, postprocessing, world_surface, _ = read_terrain(reader)
-            results[request_id] = (sections, postprocessing, world_surface)
+            request_id, sections, postprocessing, world_surface, ocean_floor = read_terrain(reader)
+            results[request_id] = (sections, postprocessing, world_surface, ocean_floor)
 
         send(worker.stdin, b"\x03")
         worker.stdin.close()
         worker.wait(timeout=120)
+
+    recorded = {}
+    if args.compare:
+        with open(args.compare) as file:
+            recorded = json.load(file)
+    to_record = {}
 
     failures = 0
     for request_id, chunk in enumerate(chunks, start=1):
@@ -193,8 +204,15 @@ def main():
             print(f"{position}: worker error: {result[1]}")
             failures += 1
             continue
-        sections, postprocessing, world_surface = result
+        sections, postprocessing, world_surface, ocean_floor = result
+        key = f"{chunk['x']},{chunk['z']}"
+        outputs = {"world_surface_wg": world_surface, "ocean_floor_wg": ocean_floor,
+                   "postprocessing": [sorted(offsets) for offsets in postprocessing]}
+        to_record[key] = outputs
         problems = []
+        for name, value in recorded.get(key, {}).items():
+            if outputs[name] != value:
+                problems.append(f"{name} differs from the recorded run")
         if block_hash(sections, air_ids) != chunk["stages"]["minecraft:terrain"]:
             problems.append("block hash differs from vanilla")
         surface_errors = world_surface_errors(sections, world_surface, air_ids, min_y)
@@ -207,6 +225,12 @@ def main():
             failures += 1
             print(f"{position}: " + "; ".join(problems))
 
+    if args.record:
+        with open(args.record, "w") as file:
+            json.dump(to_record, file)
+    compared = sum(1 for chunk in chunks if f"{chunk['x']},{chunk['z']}" in recorded)
+    if args.compare:
+        print(f"{compared} chunks compared with {args.compare}")
     print(f"{len(chunks) - failures}/{len(chunks)} chunks match ({args.dimension})")
     return 1 if failures else 0
 
