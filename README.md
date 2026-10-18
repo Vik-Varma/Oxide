@@ -66,13 +66,16 @@ Oxide uses vanilla's own `buildTerrain` for a chunk, or for the whole world, whe
 
 ## Roadmap
 
-0. **Foundations.** SteelMC targets 26.3 (merged `TERRAIN` step). Confirm the
-   `buildTerrain` inputs and outputs against the 26.3 source.
-1. **Worker.** Headless generation-only Steel engine; terrain request/reply over
-   stdin/stdout; handshake with registry fingerprint.
+0. **Foundations.** *Done.* SteelMC targets 26.3 (merged `TERRAIN` step);
+   `buildTerrain`'s outputs confirmed against the 26.3 source: block states,
+   post-processing offsets, and the `WORLD_SURFACE_WG` / `OCEAN_FLOOR_WG` heightmaps.
+1. **Worker.** *Done.* [`worker/`](worker/): headless SteelMC engine, terrain
+   request/reply over stdin/stdout ([`protocol/`](protocol/)). Checked with
+   `worker/tools/verify_terrain.py`: 300 chunks per dimension match vanilla's
+   `TERRAIN` block hashes, including chunks reloaded from the worker's cache.
 2. **Mod.** Spawn/supervise the worker per world; mixin on `buildTerrain`; copy the
-   reply into the `ProtoChunk`; fallback rules above; bundle worker binaries for
-   Windows, Linux and macOS.
+   reply into the `ProtoChunk`; worldgen registry fingerprint and the other fallback
+   rules above; bundle worker binaries for Windows, Linux and macOS.
 3. **Parity and benchmarks.** Same seeds with and without Oxide, compared block for
    block after `FULL`; edge cases (old-world borders, worker crash mid-generation,
    flat/amplified, Nether, End). Benchmarks against vanilla and vanilla + C2ME.
