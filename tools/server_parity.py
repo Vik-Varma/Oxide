@@ -229,6 +229,8 @@ def run(args):
         command.append("-PoxideWorker=%s" % Path(args.worker).resolve())
     if args.verify:
         command.append("-PoxideVerify")
+    if args.no_prefetch:
+        command.append("-PoxideNoPrefetch")
     env = dict(os.environ, JAVA_HOME=args.java_home)
     log = open(run_dir / "server-output.log", "w")
     server = subprocess.Popen(command, cwd=MOD_DIR, stdout=log, stderr=subprocess.STDOUT, env=env)
@@ -322,6 +324,7 @@ def main():
                             help="vanilla generates terrain; the mod compares the worker's output with it")
     run_parser.add_argument("--dimensions", nargs="+", default=["minecraft:overworld"])
     run_parser.add_argument("--mods", nargs="*", default=[], help="extra mod jars to install, e.g. C2ME")
+    run_parser.add_argument("--no-prefetch", action="store_true", help="turn off Oxide's terrain prefetching")
     compare_parser = commands.add_parser("compare")
     compare_parser.add_argument("left")
     compare_parser.add_argument("right")

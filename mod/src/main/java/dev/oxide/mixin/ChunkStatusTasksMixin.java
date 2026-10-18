@@ -21,6 +21,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  */
 @Mixin(ChunkStatusTasks.class)
 abstract class ChunkStatusTasksMixin {
+	@Inject(method = "generateStructureReferences", at = @At("HEAD"))
+	private static void oxide$prefetchTerrain(WorldGenContext context, ChunkStep step, StaticCache2D<GenerationChunkHolder> chunks,
+		ChunkAccess chunk, CallbackInfoReturnable<CompletableFuture<ChunkAccess>> callback) {
+		TerrainHook.prefetch(context, chunk);
+	}
+
 	@Inject(method = "buildTerrain", at = @At("HEAD"), cancellable = true)
 	private static void oxide$buildTerrain(WorldGenContext context, ChunkStep step, StaticCache2D<GenerationChunkHolder> chunks,
 		ChunkAccess chunk, CallbackInfoReturnable<CompletableFuture<ChunkAccess>> callback) {

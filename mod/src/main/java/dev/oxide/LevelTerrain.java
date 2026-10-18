@@ -3,8 +3,10 @@ package dev.oxide;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 import dev.oxide.worker.TerrainData;
 import dev.oxide.worker.WorkerConnection;
@@ -13,6 +15,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.util.SimpleBitStorage;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.biome.MultiNoiseBiomeSource;
@@ -39,8 +42,20 @@ final class LevelTerrain implements AutoCloseable {
 		Heightmap.Types.WORLD_SURFACE
 	);
 
+	/** {@code -Doxide.prefetch=false} turns prefetching off, e.g. to measure its effect. */
+	static final boolean PREFETCH = !"false".equals(System.getProperty("oxide.prefetch"));
+	/** Prefetched chunks kept at most; beyond this, stale entries are dropped and new ones skipped. */
+	private static final int PREFETCH_LIMIT = 4096;
+	/** A prefetched chunk not used within this time is assumed not to reach {@code TERRAIN} soon. */
+	private static final long PREFETCH_MAX_AGE_NANOS = 120_000_000_000L;
+
 	private final ChunkGenerator generator;
 	private final WorkerConnection worker;
+	/** Terrain requested ahead of the {@code TERRAIN} step, by packed chunk position. */
+	private final Map<Long, Prefetched> prefetched = new ConcurrentHashMap<>();
+
+	private record Prefetched(CompletableFuture<TerrainData> terrain, long requestedAt) {
+	}
 
 	private LevelTerrain(ChunkGenerator generator, WorkerConnection worker) {
 		this.generator = generator;
@@ -98,9 +113,33 @@ final class LevelTerrain implements AutoCloseable {
 		return this.worker.failure() == null;
 	}
 
-	/** The worker's raw {@code TERRAIN} output for a chunk. */
+	/**
+	 * Asks the worker for a chunk's terrain before its {@code TERRAIN} step runs, so the
+	 * worker always has work queued. Chunk systems that block a thread per step (Moonrise)
+	 * otherwise keep only a few requests in flight.
+	 */
+	void prefetch(ChunkPos pos) {
+		if (this.prefetched.size() >= PREFETCH_LIMIT) {
+			long now = System.nanoTime();
+			this.prefetched.values().removeIf(entry -> now - entry.requestedAt() > PREFETCH_MAX_AGE_NANOS);
+			if (this.prefetched.size() >= PREFETCH_LIMIT) {
+				return;
+			}
+		}
+		this.prefetched.computeIfAbsent(pos.pack(), key ->
+			new Prefetched(this.worker.requestTerrain(pos.x(), pos.z()), System.nanoTime()));
+	}
+
+	/** Drops a prefetched chunk that vanilla generates after all. */
+	void discardPrefetch(ChunkPos pos) {
+		this.prefetched.remove(pos.pack());
+	}
+
+	/** The worker's raw {@code TERRAIN} output for a chunk, prefetched if possible. */
 	CompletableFuture<TerrainData> requestTerrain(ChunkAccess chunk) {
-		return this.worker.requestTerrain(chunk.getPos().x(), chunk.getPos().z());
+		ChunkPos pos = chunk.getPos();
+		Prefetched prefetched = this.prefetched.remove(pos.pack());
+		return prefetched != null ? prefetched.terrain() : this.worker.requestTerrain(pos.x(), pos.z());
 	}
 
 	/** The vanilla block state for a worker state id. */

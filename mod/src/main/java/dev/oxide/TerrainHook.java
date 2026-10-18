@@ -43,6 +43,7 @@ public final class TerrainHook {
 		// Next to chunks from before 1.18, vanilla blends terrain using their saved data,
 		// which SteelMC does not have.
 		if (Blender.of(new WorldGenRegion(context.level(), chunks, step, chunk)) != Blender.empty()) {
+			terrain.discardPrefetch(chunk.getPos());
 			return null;
 		}
 		if (TerrainVerifier.ENABLED) {
@@ -55,6 +56,22 @@ public final class TerrainHook {
 			}
 			return runVanilla(context, step, chunks, chunk);
 		}, OxideExecutor.get());
+	}
+
+	/**
+	 * Called at the start of a chunk's {@code STRUCTURE_REFERENCES} step, which only chunks
+	 * on their way to {@code TERRAIN} reach (unlike {@code STRUCTURE_STARTS}, which runs 8
+	 * chunks around every generated chunk). Requests the chunk's terrain from the worker
+	 * early.
+	 */
+	public static void prefetch(WorldGenContext context, ChunkAccess chunk) {
+		if (!LevelTerrain.PREFETCH || RUNNING_VANILLA.get() || !(chunk instanceof ProtoChunk) || chunk.isUpgrading()) {
+			return;
+		}
+		LevelTerrain terrain = OxideServer.forLevel(context.level());
+		if (terrain != null && terrain.generator() == context.generator()) {
+			terrain.prefetch(chunk.getPos());
+		}
 	}
 
 	/** Verify mode: vanilla generates the chunk, then the worker's output is compared with it. */
