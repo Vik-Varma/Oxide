@@ -14,9 +14,8 @@ final class ConflictingMods {
 	private static final Map<String, String> CONFLICTS = new LinkedHashMap<>();
 
 	static {
-		CONFLICTS.put("c2me", "C2ME replaces the chunk system");
-		CONFLICTS.put("c2me-rewrites-chunk-system", "C2ME replaces the chunk system");
-		CONFLICTS.put("moonrise", "Moonrise replaces the chunk system (untested with Oxide)");
+		// C2ME and Moonrise are not here on purpose: their chunk systems run vanilla's
+		// TERRAIN step through ChunkStatusTasks, where Oxide takes it over.
 		CONFLICTS.put("terrablender", "TerraBlender changes terrain generation in memory");
 	}
 

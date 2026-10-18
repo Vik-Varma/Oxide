@@ -48,13 +48,13 @@ public final class TerrainHook {
 		if (TerrainVerifier.ENABLED) {
 			return verify(context, step, chunks, chunk, terrain);
 		}
-		return terrain.buildTerrain(protoChunk).exceptionallyCompose(error -> {
+		return terrain.buildTerrain(protoChunk).exceptionallyComposeAsync(error -> {
 			long count = FALLBACKS.incrementAndGet();
 			if (count <= 10) {
 				LOGGER.warn("Oxide could not generate chunk {}; vanilla generates it: {}", chunk.getPos(), error.getMessage());
 			}
 			return runVanilla(context, step, chunks, chunk);
-		});
+		}, OxideExecutor.get());
 	}
 
 	/** Verify mode: vanilla generates the chunk, then the worker's output is compared with it. */

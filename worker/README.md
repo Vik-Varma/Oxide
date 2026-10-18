@@ -17,9 +17,10 @@ in `Cargo.toml`. That branch is upstream SteelMC plus:
   - noise-fill fluids are marked in vanilla's `doFill` order (z, x, then y from the
     top). Post-processing schedules fluid ticks in list order;
 - a build fix: `steel-worldgen` depends on `steel-utils` at build time again, so its
-  build script cannot run before the Minecraft data it reads has been downloaded. To pick up
-upstream changes, bump the `rev` to the branch's latest commit and re-run the
-checks below.
+  build script cannot run before the Minecraft data it reads has been downloaded.
+
+To pick up upstream changes, bump the `rev` to the branch's latest commit and re-run
+the checks below.
 
 ## Build
 

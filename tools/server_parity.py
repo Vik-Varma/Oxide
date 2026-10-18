@@ -25,6 +25,7 @@ Starting the server accepts the Minecraft EULA in the run directory (eula.txt).
 import argparse
 import gzip
 import os
+import shutil
 import socket
 import struct
 import subprocess
@@ -209,6 +210,10 @@ def run(args):
     run_dir = Path(args.dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "eula.txt").write_text("eula=true\n")
+    mods_dir = run_dir / "mods"
+    mods_dir.mkdir(exist_ok=True)
+    for jar in args.mods:
+        shutil.copy(jar, mods_dir / Path(jar).name)
     (run_dir / "server.properties").write_text("\n".join([
         "level-seed=%d" % args.seed,
         "enable-rcon=true",
@@ -316,6 +321,7 @@ def main():
     run_parser.add_argument("--verify", action="store_true",
                             help="vanilla generates terrain; the mod compares the worker's output with it")
     run_parser.add_argument("--dimensions", nargs="+", default=["minecraft:overworld"])
+    run_parser.add_argument("--mods", nargs="*", default=[], help="extra mod jars to install, e.g. C2ME")
     compare_parser = commands.add_parser("compare")
     compare_parser.add_argument("left")
     compare_parser.add_argument("right")

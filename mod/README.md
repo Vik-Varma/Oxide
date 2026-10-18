@@ -13,7 +13,8 @@ At server start (`OxideServer.start`) Oxide turns itself off, and vanilla genera
 terrain, if:
 
 - a conflicting mod is installed (`ConflictingMods`, see
-  [`docs/compatibility.md`](../docs/compatibility.md));
+  [`docs/compatibility.md`](../docs/compatibility.md)). C2ME and Moonrise are not
+  conflicts: Oxide overrides their terrain step;
 - any registry the `TERRAIN` step reads differs from vanilla's built-in copy, or a pack
   replaces a vanilla structure template (`VanillaTerrainCheck`);
 - no worker binary is available for the platform.

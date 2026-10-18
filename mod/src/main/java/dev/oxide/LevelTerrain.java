@@ -13,7 +13,6 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.util.SimpleBitStorage;
-import net.minecraft.util.Util;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.biome.MultiNoiseBiomeSource;
@@ -116,7 +115,7 @@ final class LevelTerrain implements AutoCloseable {
 				this.apply(chunk, data);
 				Heightmap.primeHeightmaps(chunk, PRIMED_AFTER_TERRAIN);
 				return chunk;
-			}, Util.backgroundExecutor().forName("oxideTerrain"));
+			}, OxideExecutor.get());
 	}
 
 	private void apply(ProtoChunk chunk, TerrainData data) {
