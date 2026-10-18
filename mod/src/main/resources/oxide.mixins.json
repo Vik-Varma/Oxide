@@ -3,8 +3,14 @@
 	"package": "dev.oxide.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
+		"BlenderAccessor",
+		"ChunkAccessMixin",
 		"ChunkStatusTasksMixin",
-		"ChunkStepMixin"
+		"ChunkStepMixin",
+		"LevelChunkMixin",
+		"ProtoChunkTicksAccessor",
+		"SerializableChunkDataMixin",
+		"WorldGenRegionMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

@@ -43,7 +43,7 @@ RCON_PASSWORD = "oxide-parity"
 
 class Rcon:
     def __init__(self, port):
-        self.sock = socket.create_connection(("127.0.0.1", port), timeout=30)
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=600)
         self.next_id = 1
         self._send(3, RCON_PASSWORD)
 
@@ -173,6 +173,34 @@ def state_key(state):
     return name + "".join("|%s=%s" % item for item in sorted(properties.items()))
 
 
+ZERO_LAYER = bytes(2048)
+
+
+def light_bytes(layer):
+    return ZERO_LAYER if layer is None else bytes(b & 0xFF for b in layer)
+
+
+def chunk_light(chunk):
+    """Per section Y: (block light, sky light) as 2048 packed bytes; all zero when not saved."""
+    return {section["Y"]: (light_bytes(section.get("BlockLight")), light_bytes(section.get("SkyLight")))
+            for section in chunk.get("sections", [])}
+
+
+def nibbles_differ(a, b):
+    if a == b:
+        return 0
+    return sum(((x ^ y) & 15 != 0) + ((x ^ y) >> 4 != 0) for x, y in zip(a, b))
+
+
+def read_entities(run_dir, chunk_x, chunk_z):
+    for candidate in ("world/dimensions/minecraft/overworld/entities", "world/entities"):
+        path = Path(run_dir) / candidate
+        if path.is_dir():
+            chunk = read_chunk(path, chunk_x, chunk_z)
+            return [] if chunk is None else chunk.get("Entities", [])
+    return []
+
+
 def chunk_summary(chunk):
     sections = {}
     for section in chunk.get("sections", []):
@@ -224,6 +252,14 @@ def run(args):
         "simulation-distance=2",
         "",
     ]))
+    settings = []
+    if args.no_features:
+        settings.append("features=false")
+    if args.worker_threads is not None:
+        settings.append("worker_threads=%d" % args.worker_threads)
+    if settings:
+        (run_dir / "config").mkdir(exist_ok=True)
+        (run_dir / "config" / "oxide.properties").write_text("\n".join(settings) + "\n")
     command = ["./gradlew", "--no-daemon", "-q", "runServer", "-PrunDir=%s" % run_dir]
     if args.worker:
         command.append("-PoxideWorker=%s" % Path(args.worker).resolve())
@@ -256,6 +292,7 @@ def run(args):
             if pending:
                 time.sleep(1)
         print("All %d chunks loaded in %.1f s" % (len(chunks) * len(args.dimensions), time.time() - start))
+        print("CPU time: server %.1f s, workers %.1f s" % (cpu_seconds("devlaunchinjector"), cpu_seconds("oxide-worker")))
         print(rcon.command("save-all flush"))
         rcon.command("stop")
         server.wait(timeout=600)
@@ -264,6 +301,25 @@ def run(args):
             server.terminate()
             server.wait(timeout=120)
         log.close()
+
+
+
+def cpu_seconds(command_part):
+    """User plus system CPU time of the running processes whose command line contains `command_part`."""
+    ticks = os.sysconf("SC_CLK_TCK")
+    total = 0
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            command = Path("/proc/%s/cmdline" % pid).read_bytes().replace(b"\0", b" ").decode()
+            if command_part not in command or "server_parity" in command:
+                continue
+            fields = Path("/proc/%s/stat" % pid).read_text().rsplit(")", 1)[1].split()
+        except OSError:
+            continue
+        total += int(fields[11]) + int(fields[12])
+    return total / ticks
 
 
 def wait_for_rcon(server):
@@ -313,6 +369,66 @@ def compare(args):
     return 0 if identical == total else 1
 
 
+def stats(args):
+    """Aggregate differences between two runs, for comparing against a vanilla-vs-vanilla baseline."""
+    from collections import Counter
+    left_dir, right_dir = region_dir(args.left), region_dir(args.right)
+    totals = Counter()
+    pairs = Counter()
+    heightmaps = Counter()
+    left_ids, right_ids = Counter(), Counter()
+    for chunk_x, chunk_z in square(args.radius):
+        left, right = read_chunk(left_dir, chunk_x, chunk_z), read_chunk(right_dir, chunk_x, chunk_z)
+        if left is None or right is None:
+            totals["missing chunks"] += 1
+            continue
+        a, b = chunk_summary(left), chunk_summary(right)
+        different_blocks = 0
+        for section_y in set(a["sections"]) & set(b["sections"]):
+            (blocks_a, biomes_a), (blocks_b, biomes_b) = a["sections"][section_y], b["sections"][section_y]
+            for p, q in zip(blocks_a, blocks_b):
+                if p != q:
+                    different_blocks += 1
+                    pairs[(p.split("|")[0], q.split("|")[0])] += 1
+            totals["biome cells differ"] += sum(1 for p, q in zip(biomes_a, biomes_b) if p != q)
+        totals["blocks differ"] += different_blocks
+        totals["chunks with block differences"] += different_blocks > 0
+        for name in set(a["heightmaps"]) | set(b["heightmaps"]):
+            if a["heightmaps"].get(name) != b["heightmaps"].get(name):
+                heightmaps[name] += 1
+        light_a, light_b = chunk_light(left), chunk_light(right)
+        chunk_light_differs = False
+        for section_y in set(light_a) | set(light_b):
+            for index, name in ((0, "block light"), (1, "sky light")):
+                values_a = light_a.get(section_y, (ZERO_LAYER, ZERO_LAYER))[index]
+                values_b = light_b.get(section_y, (ZERO_LAYER, ZERO_LAYER))[index]
+                different = nibbles_differ(values_a, values_b)
+                totals[name + " values differ"] += different
+                chunk_light_differs |= different > 0
+        totals["chunks with light differences"] += chunk_light_differs
+        for entity in left.get("block_entities", []):
+            left_ids["block entity " + entity.get("id", "?")] += 1
+        for entity in right.get("block_entities", []):
+            right_ids["block entity " + entity.get("id", "?")] += 1
+        for entity in read_entities(args.left, chunk_x, chunk_z):
+            left_ids["entity " + entity.get("id", "?")] += 1
+        for entity in read_entities(args.right, chunk_x, chunk_z):
+            right_ids["entity " + entity.get("id", "?")] += 1
+    print("%d chunks compared" % len(square(args.radius)))
+    for name, count in sorted(totals.items()):
+        print("  %s: %d" % (name, count))
+    for name, count in sorted(heightmaps.items()):
+        print("  heightmap %s differs in %d chunks" % (name, count))
+    print("  most common block differences (left -> right):")
+    for (p, q), count in pairs.most_common(args.top):
+        print("    %6d  %s -> %s" % (count, p, q))
+    print("  block entities and entities (left / right):")
+    for name in sorted(set(left_ids) | set(right_ids)):
+        marker = "" if left_ids[name] == right_ids[name] else "  <-"
+        print("    %-40s %5d / %5d%s" % (name, left_ids[name], right_ids[name], marker))
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -328,14 +444,24 @@ def main():
     run_parser.add_argument("--mods", nargs="*", default=[], help="extra mod jars to install, e.g. C2ME")
     run_parser.add_argument("--no-prefetch", action="store_true", help="turn off Oxide's terrain prefetching")
     run_parser.add_argument("--step-timing", action="store_true", help="log per-step generation time at shutdown")
+    run_parser.add_argument("--no-features", action="store_true",
+                            help="Oxide generates biomes and terrain only (features=false in config/oxide.properties)")
+    run_parser.add_argument("--worker-threads", type=int, help="worker_threads in config/oxide.properties")
     compare_parser = commands.add_parser("compare")
     compare_parser.add_argument("left")
     compare_parser.add_argument("right")
     compare_parser.add_argument("--radius", type=int, default=12)
+    stats_parser = commands.add_parser("stats", help="aggregate differences between two runs")
+    stats_parser.add_argument("left")
+    stats_parser.add_argument("right")
+    stats_parser.add_argument("--radius", type=int, default=12)
+    stats_parser.add_argument("--top", type=int, default=15)
     args = parser.parse_args()
     if args.command == "run":
         run(args)
         return 0
+    if args.command == "stats":
+        return stats(args)
     return compare(args)
 
 

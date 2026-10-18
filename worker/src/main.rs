@@ -14,7 +14,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use steel_core::chunk::chunk_request::ChunkRequestHandle;
 
@@ -23,8 +23,10 @@ use full_chunk::{FullChunk, LightSection, Tick};
 use protocol::{FrameWriter, Hello, PROTOCOL_VERSION, Request};
 use sections::{SectionBiomes, SectionStates};
 
-/// How long to wait for new requests while chunks are still generating.
-const BUSY_POLL: Duration = Duration::from_millis(1);
+/// How often SteelMC's scheduling runs and pending requests are checked while chunks
+/// are generating. Checking a request looks up each of its chunks, so doing it on
+/// every incoming request would spend a core with many requests in flight.
+const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 /// A request SteelMC is still working on.
 struct Pending {
@@ -103,11 +105,12 @@ fn serve(
     output: &mut impl Write,
 ) -> Result<(), String> {
     let mut pending: Vec<Pending> = Vec::new();
+    let mut next_poll = Instant::now();
     loop {
         let next = if pending.is_empty() {
             requests.recv().map_err(|_| RecvTimeoutError::Disconnected)
         } else {
-            requests.recv_timeout(BUSY_POLL)
+            requests.recv_timeout(next_poll.saturating_duration_since(Instant::now()))
         };
         match next {
             Ok(Ok(Request::Terrain {
@@ -138,6 +141,11 @@ fn serve(
             Err(RecvTimeoutError::Timeout) => {}
         }
 
+        let now = Instant::now();
+        if now < next_poll {
+            continue;
+        }
+        next_poll = now + POLL_INTERVAL;
         engine.advance_scheduling();
         send_finished(engine, &mut pending, output)
             .map_err(|error| format!("failed to write reply: {error}"))?;

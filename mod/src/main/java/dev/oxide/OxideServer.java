@@ -22,11 +22,13 @@ final class OxideServer {
 	private static volatile @Nullable OxideServer current;
 
 	private final @Nullable Path executable;
+	private final OxideConfig config;
 	/** Empty for levels Oxide does not handle, so they are only checked once. */
 	private final Map<ResourceKey<Level>, Optional<LevelTerrain>> levels = new ConcurrentHashMap<>();
 
-	private OxideServer(@Nullable Path executable) {
+	private OxideServer(@Nullable Path executable, OxideConfig config) {
 		this.executable = executable;
+		this.config = config;
 	}
 
 	/** Decides whether Oxide runs on this server. Called before any level loads. */
@@ -44,12 +46,14 @@ final class OxideServer {
 				disabledReason = Optional.of("could not prepare the worker binary: " + error.getMessage());
 			}
 		}
+		OxideConfig config = OxideConfig.load();
 		if (disabledReason.isPresent()) {
 			LOGGER.warn("Oxide is disabled: {}. Vanilla generates terrain.", disabledReason.get());
-			current = new OxideServer(null);
+			current = new OxideServer(null, config);
 		} else {
-			LOGGER.info("Oxide is enabled, using worker {}", executable);
-			current = new OxideServer(executable);
+			LOGGER.info("Oxide is enabled, using worker {}; SteelMC generates {}", executable,
+				config.features() ? "whole chunks away from existing ones" : "biomes and terrain");
+			current = new OxideServer(executable, config);
 		}
 	}
 
@@ -67,6 +71,7 @@ final class OxideServer {
 	/** Stops every worker. Their chunk caches are saved on the way out. */
 	static void stop() {
 		TerrainVerifier.logSummary();
+		GenerationStats.logSummary();
 		StepTiming.logSummary();
 		OxideServer server = current;
 		current = null;
@@ -96,7 +101,7 @@ final class OxideServer {
 			return Optional.empty();
 		}
 		try {
-			LevelTerrain terrain = LevelTerrain.start(level, this.executable);
+			LevelTerrain terrain = LevelTerrain.start(level, this.executable, this.config);
 			LOGGER.info("Oxide worker started for {}", name);
 			return Optional.of(terrain);
 		} catch (IOException error) {
