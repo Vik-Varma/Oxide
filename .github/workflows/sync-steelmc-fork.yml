@@ -1,8 +1,10 @@
-# Keeps the Vik-Varma/SteelMC fork's master an exact mirror of upstream.
+# Keeps the Vik-Varma/SteelMC fork's master an exact mirror of upstream, then
+# merges master into the fork's oxide branch (master plus Oxide's small patch).
 #
 # Runs from Oxide so the fork's own Actions (upstream's release, Docker and docs
-# workflows) can stay disabled. Only fast-forwards: if the fork's master ever has
-# commits of its own, the run fails instead of creating a merge commit.
+# workflows) can stay disabled. master only fast-forwards: if it ever has commits
+# of its own, the run fails instead of creating a merge commit. If merging into
+# oxide conflicts, the run fails and the conflict has to be resolved by hand.
 #
 # Needs the STEELMC_SYNC_TOKEN secret: a fine-grained token for Vik-Varma/SteelMC
 # with Contents and Workflows read/write (Workflows is needed when upstream
@@ -29,6 +31,7 @@ jobs:
       FORK: Vik-Varma/SteelMC
       UPSTREAM: Steel-Foundation/SteelMC
       BRANCH: master
+      PATCH_BRANCH: oxide
     steps:
       - name: Fast-forward the fork to upstream
         run: |
@@ -49,6 +52,29 @@ jobs:
               ;;
             *)
               echo "::error::Fork $BRANCH is $status relative to upstream; it must only ever be behind. Resolve it by hand."
+              exit 1
+              ;;
+          esac
+
+      - name: Merge master into the oxide branch
+        run: |
+          # 201: merged, 204: already contains master, 409: conflict.
+          response=$(gh api -X POST "repos/$FORK/merges" \
+            -f base="$PATCH_BRANCH" -f head="$BRANCH" \
+            -f commit_message="Merge $BRANCH into $PATCH_BRANCH" \
+            -i 2>gh-error.log) || true
+          status=$(printf '%s\n' "$response" | awk 'NR==1 {print $2}')
+          case "$status" in
+            201) echo "Merged $BRANCH into $PATCH_BRANCH." ;;
+            204) echo "$PATCH_BRANCH already contains $BRANCH." ;;
+            409)
+              echo "::error::Merging $BRANCH into $PATCH_BRANCH conflicts. Resolve it by hand."
+              exit 1
+              ;;
+            *)
+              printf '%s\n' "$response"
+              cat gh-error.log
+              echo "::error::Unexpected response ($status) merging $BRANCH into $PATCH_BRANCH."
               exit 1
               ;;
           esac
