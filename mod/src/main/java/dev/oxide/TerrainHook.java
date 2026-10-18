@@ -4,6 +4,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.mojang.logging.LogUtils;
+import dev.oxide.worker.TerrainData;
 import net.minecraft.server.level.GenerationChunkHolder;
 import net.minecraft.server.level.WorldGenRegion;
 import net.minecraft.util.StaticCache2D;
@@ -44,6 +45,9 @@ public final class TerrainHook {
 		if (Blender.of(new WorldGenRegion(context.level(), chunks, step, chunk)) != Blender.empty()) {
 			return null;
 		}
+		if (TerrainVerifier.ENABLED) {
+			return verify(context, step, chunks, chunk, terrain);
+		}
 		return terrain.buildTerrain(protoChunk).exceptionallyCompose(error -> {
 			long count = FALLBACKS.incrementAndGet();
 			if (count <= 10) {
@@ -51,6 +55,20 @@ public final class TerrainHook {
 			}
 			return runVanilla(context, step, chunks, chunk);
 		});
+	}
+
+	/** Verify mode: vanilla generates the chunk, then the worker's output is compared with it. */
+	private static CompletableFuture<ChunkAccess> verify(WorldGenContext context, ChunkStep step,
+		StaticCache2D<GenerationChunkHolder> chunks, ChunkAccess chunk, LevelTerrain terrain) {
+		CompletableFuture<TerrainData> workerTerrain = terrain.requestTerrain(chunk);
+		return runVanilla(context, step, chunks, chunk).thenCompose(generated -> workerTerrain.handle((data, error) -> {
+			if (error != null) {
+				LOGGER.warn("Oxide verify: worker failed for chunk {}: {}", generated.getPos(), error.getMessage());
+			} else {
+				TerrainVerifier.compare(generated, data, terrain);
+			}
+			return generated;
+		}));
 	}
 
 	private static CompletableFuture<ChunkAccess> runVanilla(WorldGenContext context, ChunkStep step,

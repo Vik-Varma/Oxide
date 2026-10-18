@@ -6,6 +6,11 @@ fixed seed, force-loads a square of chunks over RCON, waits until all of them ar
 loaded, saves, and stops the server. With `--worker`, Oxide generates terrain;
 without it, Oxide disables itself and vanilla does.
 
+With `--verify`, vanilla generates terrain and the mod compares the worker's output
+for every chunk with it, logging differences (grep the log for "Oxide verify").
+Comparing finished worlds with `compare` cannot show Oxide's accuracy on its own:
+vanilla's FEATURES step is order dependent, so two vanilla runs already differ.
+
 `compare` reads the overworld region files of two runs and compares every chunk in
 the square: block states, biomes and heightmaps.
 
@@ -155,8 +160,16 @@ def unpack_palette(container, size):
 
 
 def state_key(state):
-    properties = state.get("Properties", {})
-    return state["Name"] + "".join("|%s=%s" % item for item in sorted(properties.items()))
+    # 26.3 stores a state without properties as a plain string; NBT lists that mix
+    # types wrap non-compound entries as {"": value}.
+    if isinstance(state, str):
+        return state
+    if "" in state:
+        return state_key(state[""])
+    # 26.3 writes {id, properties}; older versions wrote {Name, Properties}.
+    name = state.get("id", state.get("Name"))
+    properties = state.get("properties", state.get("Properties", {}))
+    return name + "".join("|%s=%s" % item for item in sorted(properties.items()))
 
 
 def chunk_summary(chunk):
@@ -169,7 +182,7 @@ def chunk_summary(chunk):
         biome_ids = unpack_palette(biomes, 64) if biomes else [0] * 64
         sections[section["Y"]] = (
             [block_palette[i] for i in block_ids],
-            [biomes["palette"][i] for i in biome_ids] if biomes else [],
+            [state_key(biomes["palette"][i]) for i in biome_ids] if biomes else [],
         )
     return {
         "status": chunk.get("Status"),
@@ -209,6 +222,8 @@ def run(args):
     command = ["./gradlew", "--no-daemon", "-q", "runServer", "-PrunDir=%s" % run_dir]
     if args.worker:
         command.append("-PoxideWorker=%s" % Path(args.worker).resolve())
+    if args.verify:
+        command.append("-PoxideVerify")
     env = dict(os.environ, JAVA_HOME=args.java_home)
     log = open(run_dir / "server-output.log", "w")
     server = subprocess.Popen(command, cwd=MOD_DIR, stdout=log, stderr=subprocess.STDOUT, env=env)
@@ -216,20 +231,22 @@ def run(args):
         rcon = wait_for_rcon(server)
         chunks = square(args.radius)
         start = time.time()
-        for x0 in range(-args.radius, args.radius + 1, 16):
-            for z0 in range(-args.radius, args.radius + 1, 16):
-                x1 = min(x0 + 15, args.radius)
-                z1 = min(z0 + 15, args.radius)
-                print(rcon.command("forceload add %d %d %d %d" % (x0 * 16, z0 * 16, x1 * 16, z1 * 16)))
-        pending = set(chunks)
+        for dimension in args.dimensions:
+            for x0 in range(-args.radius, args.radius + 1, 16):
+                for z0 in range(-args.radius, args.radius + 1, 16):
+                    x1 = min(x0 + 15, args.radius)
+                    z1 = min(z0 + 15, args.radius)
+                    print(rcon.command("execute in %s run forceload add %d %d %d %d"
+                                       % (dimension, x0 * 16, z0 * 16, x1 * 16, z1 * 16)))
+        pending = {(dimension, x, z) for dimension in args.dimensions for x, z in chunks}
         while pending:
-            for chunk_x, chunk_z in list(pending):
-                reply = rcon.command("execute if loaded %d 0 %d" % (chunk_x * 16, chunk_z * 16))
+            for dimension, chunk_x, chunk_z in list(pending):
+                reply = rcon.command("execute in %s if loaded %d 0 %d" % (dimension, chunk_x * 16, chunk_z * 16))
                 if "passed" in reply.lower():
-                    pending.discard((chunk_x, chunk_z))
+                    pending.discard((dimension, chunk_x, chunk_z))
             if pending:
                 time.sleep(1)
-        print("All %d chunks loaded in %.1f s" % (len(chunks), time.time() - start))
+        print("All %d chunks loaded in %.1f s" % (len(chunks) * len(args.dimensions), time.time() - start))
         print(rcon.command("save-all flush"))
         rcon.command("stop")
         server.wait(timeout=600)
@@ -296,6 +313,9 @@ def main():
     run_parser.add_argument("--seed", type=int, default=13579)
     run_parser.add_argument("--radius", type=int, default=12)
     run_parser.add_argument("--java-home", default="/usr/lib/jvm/java-25-openjdk-amd64")
+    run_parser.add_argument("--verify", action="store_true",
+                            help="vanilla generates terrain; the mod compares the worker's output with it")
+    run_parser.add_argument("--dimensions", nargs="+", default=["minecraft:overworld"])
     compare_parser = commands.add_parser("compare")
     compare_parser.add_argument("left")
     compare_parser.add_argument("right")

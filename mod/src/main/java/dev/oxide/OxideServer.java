@@ -66,6 +66,7 @@ final class OxideServer {
 
 	/** Stops every worker. Their chunk caches are saved on the way out. */
 	static void stop() {
+		TerrainVerifier.logSummary();
 		OxideServer server = current;
 		current = null;
 		if (server == null) {

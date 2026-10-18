@@ -49,6 +49,8 @@ public final class WorkerConnection implements AutoCloseable {
 	private final Map<Integer, CompletableFuture<TerrainData>> pending = new ConcurrentHashMap<>();
 	private final AtomicInteger nextRequestId = new AtomicInteger(1);
 	private volatile @Nullable String failure;
+	/** Set by {@link #close()}, so the expected end of the process is not reported as a failure. */
+	private volatile boolean closing;
 
 	private WorkerConnection(String dimension, Process process, DataOutputStream output, DataInputStream input,
 		BlockState[] states, int minY, int sectionCount) {
@@ -192,7 +194,9 @@ public final class WorkerConnection implements AutoCloseable {
 	private void fail(String reason) {
 		if (this.failure == null) {
 			this.failure = reason;
-			LOGGER.warn("Oxide worker for {} stopped: {}. Vanilla generates its terrain from now on.", this.dimension, reason);
+			if (!this.closing) {
+				LOGGER.warn("Oxide worker for {} stopped: {}. Vanilla generates its terrain from now on.", this.dimension, reason);
+			}
 		}
 		for (Integer requestId : this.pending.keySet()) {
 			CompletableFuture<TerrainData> future = this.pending.remove(requestId);
@@ -205,6 +209,7 @@ public final class WorkerConnection implements AutoCloseable {
 	/** Asks the worker to save its cache and exit; kills it if it takes too long. */
 	@Override
 	public void close() {
+		this.closing = true;
 		try {
 			synchronized (this.output) {
 				writeFrame(this.output, ByteBuffer.allocate(1).put(SHUTDOWN));

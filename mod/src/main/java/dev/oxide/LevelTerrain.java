@@ -99,9 +99,19 @@ final class LevelTerrain implements AutoCloseable {
 		return this.worker.failure() == null;
 	}
 
+	/** The worker's raw {@code TERRAIN} output for a chunk. */
+	CompletableFuture<TerrainData> requestTerrain(ChunkAccess chunk) {
+		return this.worker.requestTerrain(chunk.getPos().x(), chunk.getPos().z());
+	}
+
+	/** The vanilla block state for a worker state id. */
+	BlockState state(short id) {
+		return this.worker.state(id);
+	}
+
 	/** Fills a {@code BIOMES}-status proto chunk with the worker's {@code TERRAIN} output. */
 	CompletableFuture<ChunkAccess> buildTerrain(ProtoChunk chunk) {
-		return this.worker.requestTerrain(chunk.getPos().x(), chunk.getPos().z())
+		return this.requestTerrain(chunk)
 			.thenApplyAsync(data -> {
 				this.apply(chunk, data);
 				Heightmap.primeHeightmaps(chunk, PRIMED_AFTER_TERRAIN);

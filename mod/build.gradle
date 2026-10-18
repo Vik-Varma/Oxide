@@ -18,6 +18,10 @@ loom {
 			if (project.hasProperty("oxideWorker")) {
 				vmArg "-Doxide.worker=${project.property("oxideWorker")}"
 			}
+			// -PoxideVerify: vanilla generates terrain and the worker's output is compared with it.
+			if (project.hasProperty("oxideVerify")) {
+				vmArg "-Doxide.verify=true"
+			}
 		}
 	}
 }
