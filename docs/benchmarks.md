@@ -29,3 +29,27 @@ container; the worker uses 2 threads. No setup fell back to vanilla for any chun
   shares the 4 cores with the server.
 - Progress is polled over RCON once a second, so differences of a second or two are
   noise.
+
+## Time per generation step (2026-10-18)
+
+Same load (1,875 chunks, three dimensions), one run each, with
+`tools/server_parity.py run --step-timing`. Each figure is the time from a step's start
+until its result is ready, including queueing, averaged per chunk. Steps run in
+parallel, so these are latencies, not CPU shares.
+
+| Step | Vanilla (33.0 s run) | Oxide (31.0 s run) |
+|---|---|---|
+| structure_starts | 0.15 ms | 0.22 ms |
+| structure_references | 0.12 ms | 0.70 ms |
+| biomes | 2.61 ms | 3.89 ms |
+| terrain | 24.19 ms | 88.05 ms (waiting on the worker's 2 threads) |
+| features | 2.57 ms | 3.99 ms |
+| initialize_light | 51.20 ms | 80.23 ms |
+| light | 34.80 ms | 35.06 ms |
+| spawn | 0.25 ms | 0.31 ms |
+| full | 31.12 ms | 14.39 ms |
+
+- Light is the longest wait: vanilla's light engine runs on a single thread, so chunks
+  queue for it. Making terrain faster barely moves the total while light stays.
+- Features are cheap in this test.
+- With 2 threads, the worker's queue is what Oxide's terrain step waits on.

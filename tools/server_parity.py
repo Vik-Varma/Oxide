@@ -231,6 +231,8 @@ def run(args):
         command.append("-PoxideVerify")
     if args.no_prefetch:
         command.append("-PoxideNoPrefetch")
+    if args.step_timing:
+        command.append("-PoxideStepTiming")
     env = dict(os.environ, JAVA_HOME=args.java_home)
     log = open(run_dir / "server-output.log", "w")
     server = subprocess.Popen(command, cwd=MOD_DIR, stdout=log, stderr=subprocess.STDOUT, env=env)
@@ -325,6 +327,7 @@ def main():
     run_parser.add_argument("--dimensions", nargs="+", default=["minecraft:overworld"])
     run_parser.add_argument("--mods", nargs="*", default=[], help="extra mod jars to install, e.g. C2ME")
     run_parser.add_argument("--no-prefetch", action="store_true", help="turn off Oxide's terrain prefetching")
+    run_parser.add_argument("--step-timing", action="store_true", help="log per-step generation time at shutdown")
     compare_parser = commands.add_parser("compare")
     compare_parser.add_argument("left")
     compare_parser.add_argument("right")

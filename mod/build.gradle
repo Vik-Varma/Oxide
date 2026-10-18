@@ -22,6 +22,10 @@ loom {
 			if (project.hasProperty("oxideVerify")) {
 				vmArg "-Doxide.verify=true"
 			}
+			// -PoxideStepTiming: log how long each generation step takes at shutdown.
+			if (project.hasProperty("oxideStepTiming")) {
+				vmArg "-Doxide.stepTiming=true"
+			}
 			// -PoxideNoPrefetch: request terrain only when the TERRAIN step runs.
 			if (project.hasProperty("oxideNoPrefetch")) {
 				vmArg "-Doxide.prefetch=false"
