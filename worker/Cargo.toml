@@ -1,0 +1,24 @@
+[package]
+name = "oxide-worker"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+description = "Generates Minecraft terrain with SteelMC for the Oxide Fabric mod"
+publish = false
+
+[dependencies]
+# SteelMC fork, oxide branch: master plus the accessors this worker needs.
+# Pinned so an upstream sync never changes the worker by surprise.
+steel-core = { git = "https://github.com/Vik-Varma/SteelMC", rev = "3dba3fa00b198f59a1bdf6bf87fc02bd9f45a90e" }
+steel-registry = { git = "https://github.com/Vik-Varma/SteelMC", rev = "3dba3fa00b198f59a1bdf6bf87fc02bd9f45a90e" }
+steel-utils = { git = "https://github.com/Vik-Varma/SteelMC", rev = "3dba3fa00b198f59a1bdf6bf87fc02bd9f45a90e" }
+
+log = "0.4.34"
+rayon = "1.12.0"
+tokio = { version = "1.53.3", features = ["rt-multi-thread"] }
+toml = "1.1.8"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
