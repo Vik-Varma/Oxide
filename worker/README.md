@@ -10,9 +10,14 @@ in `Cargo.toml`. That branch is upstream SteelMC plus:
 
 - two visibility changes the worker needs (`Chunk::generation_heightmaps`,
   `ChunkMap::advance_scheduling`);
-- a vanilla parity fix, worth sending upstream: fluids placed by surface rules are
-  marked for post-processing, as vanilla's `MaterialSystem` does. Without it, lava from
-  the Nether's surface rules never got its post-processing fluid tick. To pick up
+- vanilla parity fixes, worth sending upstream, found with the mod's verify mode:
+  - fluids placed by surface rules are marked for post-processing, as vanilla's
+    `MaterialSystem` does. Without it, lava from the Nether's surface rules never got
+    its post-processing fluid tick;
+  - noise-fill fluids are marked in vanilla's `doFill` order (z, x, then y from the
+    top). Post-processing schedules fluid ticks in list order;
+- a build fix: `steel-worldgen` depends on `steel-utils` at build time again, so its
+  build script cannot run before the Minecraft data it reads has been downloaded. To pick up
 upstream changes, bump the `rev` to the branch's latest commit and re-run the
 checks below.
 

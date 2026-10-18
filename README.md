@@ -73,12 +73,20 @@ Oxide uses vanilla's own `buildTerrain` for a chunk, or for the whole world, whe
    request/reply over stdin/stdout ([`protocol/`](protocol/)). Checked with
    `worker/tools/verify_terrain.py`: 300 chunks per dimension match vanilla's
    `TERRAIN` block hashes, including chunks reloaded from the worker's cache.
-2. **Mod.** Spawn/supervise the worker per world; mixin on `buildTerrain`; copy the
-   reply into the `ProtoChunk`; worldgen registry fingerprint and the other fallback
-   rules above; bundle worker binaries for Windows, Linux and macOS.
-3. **Parity and benchmarks.** Same seeds with and without Oxide, compared block for
-   block after `FULL`; edge cases (old-world borders, worker crash mid-generation,
-   flat/amplified, Nether, End). Benchmarks against vanilla and vanilla + C2ME.
+2. **Mod.** *Done except binary bundling.* [`mod/`](mod/): one worker per dimension,
+   hook on `ChunkStatusTasks.buildTerrain`, replies written into the `ProtoChunk`, and
+   the fallback rules above (conflicting mods in
+   [`docs/compatibility.md`](docs/compatibility.md), worldgen registries compared with
+   vanilla's built-in ones). Checked on a 26.3 dedicated server with verify mode
+   (`tools/server_parity.py run --verify`): 3,267 chunks across the overworld, Nether and
+   End match vanilla's `TERRAIN` output, including post-processing order. Still to do:
+   build and bundle worker binaries for Windows, Linux and macOS (CI).
+3. **Parity and benchmarks.** Edge cases (old-world borders, worker crash
+   mid-generation, flat/amplified worlds). Benchmarks against vanilla and vanilla +
+   C2ME. Comparing finished worlds block for block does not work as a parity test:
+   vanilla's `FEATURES` step is order dependent, and two vanilla runs of the same seed
+   already differ (403 of 625 chunks identical in one test), which is why verify mode
+   compares the `TERRAIN` step itself.
 4. **Later.** Features via 3×3 state transfer; speculative terrain ahead of the
    player.
 
