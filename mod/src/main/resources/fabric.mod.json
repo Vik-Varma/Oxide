@@ -1,0 +1,29 @@
+{
+	"schemaVersion": 1,
+	"id": "oxide",
+	"version": "${version}",
+	"name": "Oxide",
+	"description": "Generates terrain with SteelMC in a separate native process, block for block identical to vanilla.",
+	"authors": [
+		"Vik-Varma"
+	],
+	"contact": {
+		"sources": "https://github.com/Vik-Varma/Oxide"
+	},
+	"license": "AGPL-3.0-or-later",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"dev.oxide.Oxide"
+		]
+	},
+	"mixins": [
+		"oxide.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
