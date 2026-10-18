@@ -9,12 +9,13 @@ publish = false
 [dependencies]
 # SteelMC fork, oxide branch: master plus the accessors this worker needs.
 # Pinned so an upstream sync never changes the worker by surprise.
-steel-core = { git = "https://github.com/Vik-Varma/SteelMC", rev = "2c2d4d7ed0afa62f4c9152a0744811bd366059d4" }
-steel-registry = { git = "https://github.com/Vik-Varma/SteelMC", rev = "2c2d4d7ed0afa62f4c9152a0744811bd366059d4" }
-steel-utils = { git = "https://github.com/Vik-Varma/SteelMC", rev = "2c2d4d7ed0afa62f4c9152a0744811bd366059d4" }
+steel-core = { git = "https://github.com/Vik-Varma/SteelMC", rev = "101fc7d2330edf5cd257894b346f9c64cb61b79c" }
+steel-registry = { git = "https://github.com/Vik-Varma/SteelMC", rev = "101fc7d2330edf5cd257894b346f9c64cb61b79c" }
+steel-utils = { git = "https://github.com/Vik-Varma/SteelMC", rev = "101fc7d2330edf5cd257894b346f9c64cb61b79c" }
 
 log = "0.4.34"
 rayon = "1.12.0"
+simdnbt = "0.10.0"
 tokio = { version = "1.53.3", features = ["rt-multi-thread"] }
 toml = "1.1.8"
 

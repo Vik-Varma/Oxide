@@ -8,7 +8,7 @@
 use std::io::{self, Read, Write};
 
 /// Bumped on any incompatible change to a message layout.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Largest payload either side accepts, to reject a corrupted length early.
 const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
@@ -16,10 +16,12 @@ const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
 const HELLO: u8 = 0x01;
 const TERRAIN_REQUEST: u8 = 0x02;
 const SHUTDOWN: u8 = 0x03;
+const FULL_REQUEST: u8 = 0x04;
 
 const READY: u8 = 0x81;
 const TERRAIN: u8 = 0x82;
 const ERROR: u8 = 0x83;
+const FULL: u8 = 0x84;
 
 /// A message from the mod.
 #[derive(Debug)]
@@ -28,6 +30,15 @@ pub enum Request {
     Hello(Hello),
     /// Generate one chunk's `TERRAIN` step output.
     Terrain {
+        /// Echoed in the reply so the mod can match out-of-order replies.
+        request_id: u32,
+        /// Chunk X coordinate.
+        chunk_x: i32,
+        /// Chunk Z coordinate.
+        chunk_z: i32,
+    },
+    /// Generate one chunk through `LIGHT` and send all of it.
+    Full {
         /// Echoed in the reply so the mod can match out-of-order replies.
         request_id: u32,
         /// Chunk X coordinate.
@@ -69,6 +80,11 @@ pub fn read_request(input: &mut impl Read) -> io::Result<Option<Request>> {
             threads: reader.u16()?,
         }),
         TERRAIN_REQUEST => Request::Terrain {
+            request_id: reader.u32()?,
+            chunk_x: reader.i32()?,
+            chunk_z: reader.i32()?,
+        },
+        FULL_REQUEST => Request::Full {
             request_id: reader.u32()?,
             chunk_x: reader.i32()?,
             chunk_z: reader.i32()?,
@@ -185,6 +201,12 @@ impl FrameWriter {
         Self::new(TERRAIN)
     }
 
+    /// Starts a `Full` reply.
+    #[must_use]
+    pub fn full() -> Self {
+        Self::new(FULL)
+    }
+
     /// Builds a complete `Error` reply. `request_id` 0 means the session failed.
     #[must_use]
     pub fn error(request_id: u32, message: &str) -> Self {
@@ -196,6 +218,25 @@ impl FrameWriter {
 
     pub fn u8(&mut self, value: u8) {
         self.payload.push(value);
+    }
+
+    pub fn i8(&mut self, value: i8) {
+        self.payload.extend_from_slice(&value.to_be_bytes());
+    }
+
+    pub fn i16(&mut self, value: i16) {
+        self.payload.extend_from_slice(&value.to_be_bytes());
+    }
+
+    /// Writes raw bytes with a `u32` length prefix.
+    pub fn bytes(&mut self, value: &[u8]) {
+        self.u32(value.len() as u32);
+        self.payload.extend_from_slice(value);
+    }
+
+    /// Writes raw bytes without a length prefix.
+    pub fn raw(&mut self, value: &[u8]) {
+        self.payload.extend_from_slice(value);
     }
 
     pub fn u16(&mut self, value: u16) {

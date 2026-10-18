@@ -1,5 +1,4 @@
-//! A SteelMC world with no server, used only to run world generation up to the
-//! `TERRAIN` step.
+//! A SteelMC world with no server, used only to run world generation.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -17,6 +16,9 @@ use steel_core::worldgen::registry::WorldGeneratorRegistry;
 use steel_registry::REGISTRY;
 use steel_utils::types::{Difficulty, GameType};
 use steel_utils::{BlockStateId, ChunkPos, Identifier};
+
+use crate::full_chunk::FullChunk;
+use crate::sections::{SectionBiomes, SectionStates};
 use tokio::runtime::Runtime;
 
 /// Dimensions whose `TERRAIN` step this worker can generate.
@@ -30,20 +32,11 @@ const SUPPORTED_DIMENSIONS: [&str; 3] = [
 const WORLDGEN_HEIGHTMAPS: [HeightmapType; 2] =
     [HeightmapType::WorldSurfaceWg, HeightmapType::OceanFloorWg];
 
-/// One section's block states, in vanilla's `(y << 8) | (z << 4) | x` order.
-pub enum SectionStates {
-    /// Every block is this state.
-    Single(BlockStateId),
-    /// A palette of distinct states and one palette index per block.
-    Paletted {
-        palette: Vec<BlockStateId>,
-        indices: Box<[u16; 4096]>,
-    },
-}
-
 /// Everything vanilla's `TERRAIN` step leaves on a proto chunk.
 pub struct TerrainChunk {
     pub sections: Vec<SectionStates>,
+    /// Filled by vanilla's `BIOMES` step, which the mod also replaces.
+    pub biomes: Vec<SectionBiomes>,
     /// Per section, packed `x | y << 4 | z << 8` offsets marked for post-processing.
     pub postprocessing: Vec<Vec<u16>>,
     /// `WORLD_SURFACE_WG` first available Y per column, indexed `x + z * 16`.
@@ -167,17 +160,58 @@ impl Engine {
         })
     }
 
+    /// Asks SteelMC to bring a chunk and its 8 neighbours to `FULL`. Once the
+    /// neighbours are lit, no other chunk can change the centre's blocks or light.
+    /// `LIGHT` cannot be requested on its own: like vanilla's, SteelMC's ticket level
+    /// for `LIGHT` is the one for `FULL`.
+    pub fn request_full(&self, chunk_x: i32, chunk_z: i32) -> ChunkRequestHandle {
+        let positions = (-1..=1)
+            .flat_map(|dz| (-1..=1).map(move |dx| ChunkPos::new(chunk_x + dx, chunk_z + dz)))
+            .collect();
+        self.world.chunk_map.request_chunks(ChunkRequest {
+            status: ChunkStatus::Full,
+            positions,
+            ticket_kind: ChunkTicketKind::Pregen,
+        })
+    }
+
     /// Runs SteelMC's chunk scheduling once. The worker never runs a game tick, so
     /// this never overlaps `tick_game`.
     pub fn advance_scheduling(&self) {
         self.world.chunk_map.advance_scheduling();
     }
 
-    /// Reads the `TERRAIN` output of a ready request.
+    /// Reads the `TERRAIN` output of a ready [`Self::request_terrain`].
     pub fn read_terrain(
         &self,
         request: &ChunkRequestHandle,
+        chunk_x: i32,
+        chunk_z: i32,
     ) -> Result<Option<TerrainChunk>, String> {
+        let pos = ChunkPos::new(chunk_x, chunk_z);
+        Self::with_ready_chunk(request, pos, ChunkStatus::Terrain, TerrainChunk::read)
+    }
+
+    /// Reads the finished centre chunk of a ready [`Self::request_full`].
+    pub fn read_full(
+        &self,
+        request: &ChunkRequestHandle,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> Result<Option<FullChunk>, String> {
+        let pos = ChunkPos::new(chunk_x, chunk_z);
+        let entities = self.world.entity_manager().get_saveable_entities_for_chunk(pos);
+        Self::with_ready_chunk(request, pos, ChunkStatus::Full, |chunk| {
+            FullChunk::read(chunk, &entities)
+        })
+    }
+
+    fn with_ready_chunk<T>(
+        request: &ChunkRequestHandle,
+        chunk_pos: ChunkPos,
+        status: ChunkStatus,
+        read: impl FnOnce(&Chunk) -> Result<T, String>,
+    ) -> Result<Option<T>, String> {
         match request.poll() {
             ChunkRequestState::Pending { .. } => return Ok(None),
             ChunkRequestState::Cancelled => return Err("chunk request was cancelled".to_owned()),
@@ -186,13 +220,15 @@ impl Engine {
         let Some(ready) = request.ready_chunks() else {
             return Ok(None);
         };
-        let [holder] = ready.holders.as_slice() else {
-            return Err(format!("expected one chunk, got {}", ready.holders.len()));
-        };
+        let holder = ready
+            .holders
+            .iter()
+            .find(|holder| holder.get_pos() == chunk_pos)
+            .ok_or("requested chunk missing from the ready set")?;
         let chunk = holder
-            .try_chunk(ChunkStatus::Terrain)
-            .ok_or("chunk is not at TERRAIN")?;
-        TerrainChunk::read(chunk).map(Some)
+            .try_chunk(status)
+            .ok_or_else(|| format!("chunk is not at {status:?}"))?;
+        read(chunk).map(Some)
     }
 
     /// Stops generation, waits for running chunk tasks, and saves the chunk cache.
@@ -216,6 +252,12 @@ impl TerrainChunk {
             .sections
             .iter()
             .map(|section| SectionStates::read(&section.read().states))
+            .collect();
+        let biomes = chunk
+            .sections
+            .sections
+            .iter()
+            .map(|section| SectionBiomes::read(&section.read().biomes))
             .collect();
         let postprocessing = chunk.postprocessing.lock().to_vec();
 
@@ -252,37 +294,11 @@ impl TerrainChunk {
 
         Ok(Self {
             sections,
+            biomes,
             postprocessing,
             world_surface_wg: column_heights(HeightmapType::WorldSurfaceWg)?,
             ocean_floor_wg: column_heights(HeightmapType::OceanFloorWg)?,
         })
-    }
-}
-
-impl SectionStates {
-    fn read(states: &steel_core::chunk::paletted_container::BlockPalette) -> Self {
-        let mut palette: Vec<BlockStateId> = Vec::new();
-        let mut indices = Box::new([0u16; 4096]);
-        for y in 0..16 {
-            for z in 0..16 {
-                for x in 0..16 {
-                    let state = states.get(x, y, z);
-                    let index = match palette.iter().position(|known| *known == state) {
-                        Some(index) => index,
-                        None => {
-                            palette.push(state);
-                            palette.len() - 1
-                        }
-                    };
-                    indices[(y << 8) | (z << 4) | x] = index as u16;
-                }
-            }
-        }
-        if palette.len() == 1 {
-            Self::Single(palette[0])
-        } else {
-            Self::Paletted { palette, indices }
-        }
     }
 }
 
@@ -296,4 +312,15 @@ pub fn block_state_table() -> Vec<(String, Vec<(&'static str, &'static str)>)> {
             (block.key.to_string(), blocks.get_properties(state))
         })
         .collect()
+}
+
+/// Every biome key, indexed by SteelMC biome ID.
+pub fn biome_table() -> Vec<String> {
+    let mut biomes: Vec<(usize, String)> = REGISTRY
+        .biomes
+        .iter()
+        .map(|(id, biome)| (id, biome.key.to_string()))
+        .collect();
+    biomes.sort_unstable_by_key(|&(id, _)| id);
+    biomes.into_iter().map(|(_, key)| key).collect()
 }

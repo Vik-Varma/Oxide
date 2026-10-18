@@ -1,10 +1,13 @@
-//! `oxide-worker`: generates Minecraft terrain with SteelMC for the Oxide mod.
+//! `oxide-worker`: generates Minecraft chunks with SteelMC for the Oxide mod.
 //!
 //! The mod starts one worker per dimension and talks to it over stdin/stdout
 //! (see [`protocol`]). Logs go to stderr.
 
 mod engine;
+mod full_chunk;
 mod protocol;
+mod sections;
+mod vanilla_nbt;
 
 use std::io::{self, BufReader, BufWriter, Write};
 use std::num::NonZeroUsize;
@@ -15,16 +18,27 @@ use std::time::Duration;
 
 use steel_core::chunk::chunk_request::ChunkRequestHandle;
 
-use engine::{Engine, SectionStates, TerrainChunk};
+use engine::{Engine, TerrainChunk};
+use full_chunk::{FullChunk, LightSection, Tick};
 use protocol::{FrameWriter, Hello, PROTOCOL_VERSION, Request};
+use sections::{SectionBiomes, SectionStates};
 
 /// How long to wait for new requests while chunks are still generating.
 const BUSY_POLL: Duration = Duration::from_millis(1);
 
-/// A terrain request SteelMC is still working on.
+/// A request SteelMC is still working on.
 struct Pending {
     request_id: u32,
+    kind: RequestKind,
+    chunk_x: i32,
+    chunk_z: i32,
     handle: ChunkRequestHandle,
+}
+
+#[derive(Clone, Copy)]
+enum RequestKind {
+    Terrain,
+    Full,
 }
 
 fn main() {
@@ -102,7 +116,21 @@ fn serve(
                 chunk_z,
             })) => pending.push(Pending {
                 request_id,
+                kind: RequestKind::Terrain,
+                chunk_x,
+                chunk_z,
                 handle: engine.request_terrain(chunk_x, chunk_z),
+            }),
+            Ok(Ok(Request::Full {
+                request_id,
+                chunk_x,
+                chunk_z,
+            })) => pending.push(Pending {
+                request_id,
+                kind: RequestKind::Full,
+                chunk_x,
+                chunk_z,
+                handle: engine.request_full(chunk_x, chunk_z),
             }),
             Ok(Ok(Request::Shutdown)) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
             Ok(Ok(Request::Hello(_))) => return Err("unexpected second Hello".to_owned()),
@@ -116,8 +144,8 @@ fn serve(
     }
 }
 
-/// Replies to every pending request whose chunk has reached `TERRAIN`. Dropping a
-/// finished request releases its SteelMC ticket so the chunk can unload.
+/// Replies to every pending request whose chunks are ready. Dropping a finished
+/// request releases its SteelMC tickets so the chunks can unload.
 fn send_finished(
     engine: &Engine,
     pending: &mut Vec<Pending>,
@@ -126,12 +154,21 @@ fn send_finished(
     let mut index = 0;
     while index < pending.len() {
         let request = &pending[index];
-        let frame = match engine.read_terrain(&request.handle) {
+        let (x, z) = (request.chunk_x, request.chunk_z);
+        let frame = match request.kind {
+            RequestKind::Terrain => engine
+                .read_terrain(&request.handle, x, z)
+                .map(|terrain| terrain.map(|terrain| terrain_frame(request.request_id, &terrain))),
+            RequestKind::Full => engine
+                .read_full(&request.handle, x, z)
+                .map(|full| full.map(|full| full_frame(request.request_id, &full))),
+        };
+        let frame = match frame {
             Ok(None) => {
                 index += 1;
                 continue;
             }
-            Ok(Some(terrain)) => terrain_frame(request.request_id, &terrain),
+            Ok(Some(frame)) => frame,
             Err(error) => FrameWriter::error(request.request_id, &error),
         };
         frame.send(output)?;
@@ -155,14 +192,53 @@ fn send_ready(engine: &Engine, output: &mut impl Write) -> io::Result<()> {
             frame.string(value);
         }
     }
+    let biomes = engine::biome_table();
+    frame.u16(biomes.len() as u16);
+    for biome in &biomes {
+        frame.string(biome);
+    }
     frame.send(output)
 }
 
 fn terrain_frame(request_id: u32, terrain: &TerrainChunk) -> FrameWriter {
     let mut frame = FrameWriter::terrain();
     frame.u32(request_id);
-    frame.u16(terrain.sections.len() as u16);
-    for section in &terrain.sections {
+    write_sections(&mut frame, &terrain.sections, &terrain.biomes);
+    write_postprocessing(&mut frame, &terrain.postprocessing);
+    for heights in [&terrain.world_surface_wg, &terrain.ocean_floor_wg] {
+        write_heights(&mut frame, heights);
+    }
+    frame
+}
+
+fn full_frame(request_id: u32, full: &FullChunk) -> FrameWriter {
+    let mut frame = FrameWriter::full();
+    frame.u32(request_id);
+    write_sections(&mut frame, &full.sections, &full.biomes);
+    write_postprocessing(&mut frame, &full.postprocessing);
+    frame.u8(full.heightmaps.len() as u8);
+    for (name, heights) in &full.heightmaps {
+        frame.string(name);
+        write_heights(&mut frame, heights);
+    }
+    for layer in [&full.block_light, &full.sky_light] {
+        write_light(&mut frame, layer);
+    }
+    for ticks in [&full.block_ticks, &full.fluid_ticks] {
+        write_ticks(&mut frame, ticks);
+    }
+    for list in [&full.block_entities, &full.entities] {
+        frame.u32(list.len() as u32);
+        for nbt in list {
+            frame.bytes(nbt);
+        }
+    }
+    frame
+}
+
+fn write_sections(frame: &mut FrameWriter, sections: &[SectionStates], biomes: &[SectionBiomes]) {
+    frame.u16(sections.len() as u16);
+    for section in sections {
         match section {
             SectionStates::Single(state) => {
                 frame.u8(0);
@@ -185,18 +261,53 @@ fn terrain_frame(request_id: u32, terrain: &TerrainChunk) -> FrameWriter {
             }
         }
     }
-    for offsets in &terrain.postprocessing {
+    for section in biomes {
+        frame.u8(section.palette.len() as u8);
+        for &biome in &section.palette {
+            frame.u16(biome);
+        }
+        frame.raw(&section.indices);
+    }
+}
+
+fn write_postprocessing(frame: &mut FrameWriter, postprocessing: &[Vec<u16>]) {
+    for offsets in postprocessing {
         frame.u16(offsets.len() as u16);
         for &offset in offsets {
             frame.u16(offset);
         }
     }
-    for heights in [&terrain.world_surface_wg, &terrain.ocean_floor_wg] {
-        for &height in heights {
-            frame.i32(height);
+}
+
+fn write_heights(frame: &mut FrameWriter, heights: &[i32; 256]) {
+    for &height in heights {
+        frame.i32(height);
+    }
+}
+
+fn write_light(frame: &mut FrameWriter, sections: &[LightSection]) {
+    frame.u16(sections.len() as u16);
+    for section in sections {
+        frame.u16(section.index as u16);
+        match &section.data {
+            None => frame.u8(0),
+            Some(data) => {
+                frame.u8(1);
+                frame.raw(data);
+            }
         }
     }
-    frame
+}
+
+fn write_ticks(frame: &mut FrameWriter, ticks: &[Tick]) {
+    frame.u32(ticks.len() as u32);
+    for tick in ticks {
+        frame.string(&tick.kind);
+        frame.u8(tick.x);
+        frame.i16(tick.y);
+        frame.u8(tick.z);
+        frame.i8(tick.priority);
+    }
 }
 
 /// Reads requests on their own thread so generation keeps running while the
